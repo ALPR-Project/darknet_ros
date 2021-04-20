@@ -128,6 +128,10 @@ void YoloObjectDetector::init() {
   int detectionImageQueueSize;
   bool detectionImageLatch;
 
+  std::string vehiclesTopicName;
+  int vehiclesQueueSize;
+  bool vehiclesLatch;
+
   nodeHandle_.param("subscribers/camera_reading/topic", cameraTopicName, std::string("/camera/image_raw"));
   nodeHandle_.param("subscribers/camera_reading/queue_size", cameraQueueSize, 1);
   nodeHandle_.param("publishers/object_detector/topic", objectDetectorTopicName, std::string("found_object"));
@@ -140,6 +144,10 @@ void YoloObjectDetector::init() {
   nodeHandle_.param("publishers/detection_image/queue_size", detectionImageQueueSize, 1);
   nodeHandle_.param("publishers/detection_image/latch", detectionImageLatch, true);
 
+  nodeHandle_.param("publishers/vehicles/topic", vehiclesTopicName, std::string("vehicles"));
+  nodeHandle_.param("publishers/vehicles/queue_size", vehiclesQueueSize, 100);
+  nodeHandle_.param("publishers/vehicles/latch", vehiclesLatch, false);
+
   imageSubscriber_ = imageTransport_.subscribe(cameraTopicName, cameraQueueSize, &YoloObjectDetector::cameraCallback, this);
   objectPublisher_ =
       nodeHandle_.advertise<darknet_ros_msgs::ObjectCount>(objectDetectorTopicName, objectDetectorQueueSize, objectDetectorLatch);
@@ -150,6 +158,8 @@ void YoloObjectDetector::init() {
   imageRePublisher_ = 
       nodeHandle_.advertise<sensor_msgs::Image>("image_raw", detectionImageQueueSize, detectionImageLatch);
 
+  vehiclePublisher_ = 
+      nodeHandle_.advertise<alpr_msgs::Vehicles>(vehiclesTopicName, vehiclesQueueSize, vehiclesLatch);
 
   // Action servers.
   std::string checkForObjectsActionName;
@@ -159,6 +169,27 @@ void YoloObjectDetector::init() {
   checkForObjectsActionServer_->registerPreemptCallback(boost::bind(&YoloObjectDetector::checkForObjectsActionPreemptCB, this));
   checkForObjectsActionServer_->start();
 }
+
+sensor_msgs::CompressedImage YoloObjectDetector::compressedImageMsg(cv_bridge::CvImagePtr& src)
+{
+  // Compressed image message
+  sensor_msgs::CompressedImage compressed;
+  compressed.header = src->header;
+  compressed.format = src->encoding;
+  compressed.format += "; jpeg compressed ";
+
+  // Compression settings
+  std::vector<int> params;
+  params.resize(3, 0);
+
+  params[0] = CV_IMWRITE_JPEG_QUALITY;
+  params[1] = 95;
+
+  cv::imencode(".jpg", src->image, compressed.data, params);
+
+  return compressed;
+}
+
 
 void YoloObjectDetector::cameraCallback(const sensor_msgs::ImageConstPtr& msg) {
   ROS_DEBUG("[YoloObjectDetector] USB image received.");
@@ -593,10 +624,12 @@ void* YoloObjectDetector::publishInThread() {
     msg.count = num;
     objectPublisher_.publish(msg);
 
+    alpr_msgs::Vehicles vehicles;
+
     for (int i = 0; i < numClasses_; i++) {
       if (rosBoxCounter_[i] > 0) {
         darknet_ros_msgs::BoundingBox boundingBox;
-
+        alpr_msgs::Vehicle vehicle;
         for (int j = 0; j < rosBoxCounter_[i]; j++) {
           int xmin = (rosBoxes_[i][j].x - rosBoxes_[i][j].w / 2) * frameWidth_;
           int ymin = (rosBoxes_[i][j].y - rosBoxes_[i][j].h / 2) * frameHeight_;
@@ -604,13 +637,20 @@ void* YoloObjectDetector::publishInThread() {
           int ymax = (rosBoxes_[i][j].y + rosBoxes_[i][j].h / 2) * frameHeight_;
 
           boundingBox.Class = classLabels_[i];
+          vehicle.Class     = classLabels_[i];
           boundingBox.id = i;
           boundingBox.probability = rosBoxes_[i][j].prob;
-          boundingBox.xmin = xmin;
-          boundingBox.ymin = ymin;
-          boundingBox.xmax = xmax;
-          boundingBox.ymax = ymax;
+          vehicle.probability = rosBoxes_[i][j].prob;
+          boundingBox.xmin        = xmin;
+          vehicle.vehicle_bb.xmin = xmin;
+          boundingBox.ymin        = ymin;
+          vehicle.vehicle_bb.ymin = ymin;
+          boundingBox.xmax        = xmax;
+          vehicle.vehicle_bb.xmax = xmax;
+          boundingBox.ymax        = ymax;
+          vehicle.vehicle_bb.ymax = ymax;
           boundingBoxesResults_.bounding_boxes.push_back(boundingBox);
+          vehicles.vehicles.push_back(vehicle);
         }
       }
     }
@@ -618,6 +658,20 @@ void* YoloObjectDetector::publishInThread() {
     boundingBoxesResults_.header.frame_id = "detection";
     boundingBoxesResults_.image_header = headerBuff_[(buffIndex_ + 1) % 3];
     boundingBoxesPublisher_.publish(boundingBoxesResults_);
+
+    cv_bridge::CvImage cvCamImage;
+    cvCamImage.header.stamp     = ros::Time::now();
+    cvCamImage.header.frame_id  = "image_raw";
+    cvCamImage.encoding         = sensor_msgs::image_encodings::BGR8;
+    cvCamImage.image            = cam_image->image;
+    imageRePublisher_.publish(*cvCamImage.toImageMsg());
+    
+    vehicles.header.stamp     = ros::Time::now();
+    vehicles.header.frame_id  = "camera";
+    vehicles.image_raw        = compressedImageMsg(cam_image);
+
+    vehiclePublisher_.publish(vehicles);
+
   } else {
     darknet_ros_msgs::ObjectCount msg;
     msg.header.stamp = ros::Time::now();
@@ -626,12 +680,7 @@ void* YoloObjectDetector::publishInThread() {
     objectPublisher_.publish(msg);
   }
   
-  cv_bridge::CvImage cvCamImage;
-  cvCamImage.header.stamp     = ros::Time::now();
-  cvCamImage.header.frame_id  = "image_raw";
-  cvCamImage.encoding         = sensor_msgs::image_encodings::BGR8;
-  cvCamImage.image            = cam_image->image;
-  imageRePublisher_.publish(*cvCamImage.toImageMsg());
+
 
   if (isCheckingForObjects()) {
     ROS_DEBUG("[YoloObjectDetector] check for objects in image.");

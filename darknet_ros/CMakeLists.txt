@@ -58,6 +58,7 @@ find_package(catkin REQUIRED
     actionlib
     darknet_ros_msgs
     image_transport
+    alpr_msgs
 )
 
 # Enable OPENCV in darknet
@@ -76,6 +77,7 @@ catkin_package(
     rospy
     std_msgs
     darknet_ros_msgs
+    alpr_msgs
     image_transport
   DEPENDS
     Boost

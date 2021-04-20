@@ -38,6 +38,13 @@
 #include <darknet_ros_msgs/CheckForObjectsAction.h>
 #include <darknet_ros_msgs/ObjectCount.h>
 
+//alpr_ros_msgs
+#include <alpr_msgs/BoundingBox.h>
+#include <alpr_msgs/Vehicle.h>
+#include <alpr_msgs/Vehicles.h>
+#include <alpr_msgs/Point.h>
+#include <alpr_msgs/Polygon_rect.h>
+
 // Darknet.
 #ifdef GPU
 #include "cublas_v2.h"
@@ -147,6 +154,7 @@ class YoloObjectDetector {
   image_transport::Subscriber imageSubscriber_;
   ros::Publisher objectPublisher_;
   ros::Publisher boundingBoxesPublisher_;
+  ros::Publisher vehiclePublisher_;
 
   //! Detected objects.
   std::vector<std::vector<RosBox_> > rosBoxes_;
@@ -218,6 +226,8 @@ class YoloObjectDetector {
   int sizeNetwork(network* net);
 
   void rememberNetwork(network* net);
+
+  sensor_msgs::CompressedImage compressedImageMsg(cv_bridge::CvImagePtr& src);
 
   detection* avgPredictions(network* net, int* nboxes);
 
